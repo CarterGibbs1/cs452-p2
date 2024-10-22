@@ -1,26 +1,43 @@
 #include <stdlib.h>
+#include <stdio.h>
+#include <pthread.h>
 #include "lab.h"
 
 typedef struct queue queue;
+typedef struct node node;
+
+struct node {
+    void *data;
+    node *next;
+};
 
 struct queue {
     int MAX_SIZE;
-    int head;   // represents index of head node
-    int tail;   // represents index of tail node
-    void **data;    // represents circular array of data
+    int curr_size;
+    node *head;   // represents head node
+    node *tail;   // represents tail node
+    //void **data;    // represents circular array of data
+    bool shutdown;
+    pthread_mutex_t mutex;   // mutex
 };
 
 queue_t queue_init(int capacity) {
     queue_t q = (queue_t) malloc(sizeof(queue));
-    q->data = (void**) malloc(capacity * sizeof(void*));
+    //q->data = (void**) malloc(capacity * sizeof(void*));
     q->MAX_SIZE = capacity;
-    q->head=-1;
-    q->tail=-1;
+    q->curr_size = 0;
+    q->head=NULL;
+    q->tail=NULL;
+    q->shutdown = false;
+    pthread_mutex_init(&q->mutex, NULL);
     return q;
 }
 
 void queue_destroy(queue_t q) {
-    free(q->data);
+    while (!is_empty(q)) {
+        void *data = dequeue(q);
+        free(data);
+    }
     free(q);
 }
 
@@ -30,21 +47,37 @@ void enqueue(queue_t q, void *data) {
         - no head/tail
         - too many elements
     */
-    
+
+    // Needs to wait for some condition, cond is placeholder for now
+    /**
+    while (q->curr_size == q->MAX_SIZE && !q->shutdown) {
+        pthread_cond_wait(&q->cond, &q->mutex);
+    }
+     */
+
+    pthread_mutex_lock(&(q->mutex));
     // if too many elements
-    if (abs(q->tail - q->head) == q->MAX_SIZE) {
+    /**if (q->curr_size == q->MAX_SIZE || q->shutdown) {
+        pthread_mutex_unlock(&(q->mutex));
         return;
+    } */
+
+    
+
+    node *newNode = (node *) malloc(sizeof(node));
+    newNode->data = data;
+    newNode->next = NULL;
+
+    // if no elements
+    if (q->curr_size == 0) {
+        q->head = newNode;
+        q->tail = newNode;
+    } else {
+        (q->tail)->next = newNode;
+        q->tail = newNode;
     }
-
-    // if no head/tail
-    if (q->head == -1) {
-        q->head = 0;
-    }
-
-    int tail_idx = q->head % q->MAX_SIZE;
-
-    q->data[tail_idx + 1] = data;
-    q->tail++;
+    q->curr_size++;
+    pthread_mutex_unlock(&(q->mutex));
 }
 
 void *dequeue(queue_t q) {
@@ -55,36 +88,48 @@ void *dequeue(queue_t q) {
         - if head > tail (since it is circular)
     */
 
-    // if no elements
-    if (q->head == -1) {
+    // Needs to wait for condition
+    while (is_empty(q) && !q->shutdown) {
+        pthread_cond_wait(&q->cond, &q->mutex);
+    }
+    if (is_empty(q) && q->shutdown) {
+        pthread_mutex_unlock(&(q->mutex));
         return NULL;
     }
 
-    // adjust because of circular array
-    int head_idx = q->head % q->MAX_SIZE;
-    int tail_idx = q->tail % q->MAX_SIZE;
+    pthread_mutex_lock(&(q->mutex));
 
     // if only one element
-    if (head_idx == tail_idx) {
-        void *retVal = q->data[head_idx];
-        q->head = -1;
-        q->tail = -1;
+    if (q->curr_size == 1) {
+        node *retNode = q->head;
+        void *retVal = retNode->data;
+        q->head = NULL;
+        q->tail = NULL;
+        q->curr_size--;
+        free(retNode);
+        pthread_mutex_unlock(&(q->mutex));
         return retVal;
     }
 
-    void *retVal = q->data[tail_idx];
-    q->tail--;
+    node *retNode = q->head;
+    q->head = retNode->next;
+    q->curr_size--;
+    void *retVal = retNode->data;
+    free(retNode);
+    pthread_mutex_unlock(&(q->mutex));
     return retVal;
 }
 
 void queue_shutdown(queue_t q) {
-
+    pthread_mutex_lock(&(q->mutex));
+    q->shutdown = true;
+    pthread_mutex_unlock(&(q->mutex));
 }
 
 bool is_empty(queue_t q) {
-    return q->head == -1;
+    return q->curr_size == 0;
 }
 
 bool is_shutdown(queue_t q) {
-    return false;
+    return q->shutdown;
 }
